@@ -32,8 +32,7 @@ mongo_uri = 'mongodb://' + mdb_user + ':' + mdb_pass + '@' + mdb_host
 
 daily_sql = ["DELETE FROM nonstop24payments WHERE userid IS NULL;",
              "DELETE FROM paymentsystemslog WHERE userid IS NULL;",
-             "DELETE FROM paymentsystemslog WHERE NOT id IN (SELECT p.id FROM paymentsystemslog  p "
-             "INNER JOIN users u ON p.userid = u.id);",
+             "DELETE FROM paymentsystemslog WHERE NOT id IN (SELECT p.id FROM paymentsystemslog p INNER JOIN users u ON p.userid = u.id);",
              "DELETE FROM persists_auth_keys WHERE exparedate < now();",
              "DELETE FROM iptable WHERE add_date < (now()- INTERVAL '2 days');"
              ]
