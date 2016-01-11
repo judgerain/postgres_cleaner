@@ -5,7 +5,6 @@ import datetime
 import time
 import math
 import sys
-import logcreate
 import os
 from contextlib import contextmanager
 from pymongo import MongoClient
@@ -17,15 +16,15 @@ os.chdir(os.getcwd())
 # config:
 logname = 'pg.log'
 # postgres connection data:
-pg_database = 'nura_cleaner'
-pg_user = 'postgres'
-pg_password = 'postgres'
-pg_host = '192.168.0.98'
+pg_database = ''
+pg_user = ''
+pg_password = ''
+pg_host = ''
 # mongodb connection data:
-mdb_host = '192.168.0.98'
-mdb_user = 'mongodb'
-mdb_pass = 'mongodb'
-mdb_db = 'nura'
+mdb_host = ''
+mdb_user = ''
+mdb_pass = ''
+mdb_db = ''
 
 pg_dsn = 'database=pg_database, user=pg_user, password=pg_password, host=pg_host'
 mongo_uri = 'mongodb://' + mdb_user + ':' + mdb_pass + '@' + mdb_host
@@ -55,6 +54,7 @@ tmp_table_prepare_sql = [
             NOT id IN (SELECT DISTINCT userid FROM payments_odkl) AND
             NOT id IN (SELECT DISTINCT userid FROM payments_play_market) AND
             NOT id IN (SELECT DISTINCT userid FROM paymentsystemslog) AND
+            NOT id IN (SELECT DISTINCT userid FROM payments_app_store) AND
             clanid IS NULL AND id IN (SELECT u.id FROM users u INNER JOIN userlogons ul
             ON u.id = ul.userid WHERE u.level = 0 AND ul.lastentertime < (now() - INTERVAL '1 weeks'));
     """,
@@ -74,6 +74,7 @@ tmp_table_prepare_sql = [
             NOT id IN (SELECT DISTINCT userid FROM payments_odkl) AND
             NOT id IN (SELECT DISTINCT userid FROM payments_play_market) AND
             NOT id IN (SELECT DISTINCT userid FROM paymentsystemslog) AND
+            NOT id IN (SELECT DISTINCT userid FROM payments_app_store) AND
             clanid IS NULL AND
             id IN (SELECT u.id FROM users u INNER JOIN userlogons ul ON u.id = ul.userid
             WHERE u.level > 0 AND u.level < 4 AND ul.lastentertime < (now() - INTERVAL '1 months'));
@@ -94,6 +95,7 @@ tmp_table_prepare_sql = [
             NOT id IN (SELECT DISTINCT userid FROM payments_odkl) AND
             NOT id IN (SELECT DISTINCT userid FROM payments_play_market) AND
             NOT id IN (SELECT DISTINCT userid FROM paymentsystemslog) AND
+            NOT id IN (SELECT DISTINCT userid FROM payments_app_store) AND
             clanid IS NULL AND
             id IN (SELECT u.id FROM users u INNER JOIN userlogons ul ON u.id = ul.userid
             WHERE u.level >= 4 AND u.level < 8 AND ul.lastentertime < (now() - INTERVAL '6 months'));
@@ -123,6 +125,7 @@ class PostgresqlWorker(psycopg.cursor):
             yield self
             self.execute('commit;')
         except:
+            print(sys.exc_info())
             self.execute('rollback;')
 
     def get_columns_list(self, table='users'):
@@ -138,7 +141,7 @@ class PostgresqlWorker(psycopg.cursor):
         timeleft = sec_to_deadline - time.time()
         rounds = timeleft / (5 * 60)
         limit = tmp_line_numbers[0][0] / rounds
-        limit = math.ceil(limit) + 20
+        limit = math.ceil(limit) + 50
         return limit
 
     def row_numbers(self, sql):
@@ -153,7 +156,7 @@ class PostgresqlWorker(psycopg.cursor):
         self.mongo = []
         x = self.fetchall()
         for row in x:
-            # doc = {x: y for x, y in zip(column_list, row)}
+            #doc = {x: y for x, y in zip(column_list, row)}
             doc = dict((x, y) for (x, y) in zip(column_list, row))
             for rec in doc:
                 if type(doc[rec]) is Decimal:
@@ -167,13 +170,13 @@ def pg_backuper(pg_connection, sqls):
     pg = PostgresqlWorker(pg_connection)
     mw = MongoWorker(mongo_uri)
     for table in sorted(sqls):
-        log.logwrite('backuping table:', table, ': ', sqls[table][1])
+        print('backuping table:', table, ': ', sqls[table][1])
         print(sqls[table][1], sqls[table][0], table)
         mongo_docs = pg.docs_for_mongo(sqls[table][1], sqls[table][0], table)
         try:
             mw.get_database(mdb_db).get_collection(table).insert_many(mongo_docs)
         except TypeError:
-            log.logwrite(sys.exc_info())
+            print(sys.exc_info())
             exit()
         except pymongo.errors.BulkWriteError:
             for doc in mongo_docs:
@@ -197,21 +200,21 @@ def sql_multi_execution(pg_connection, sqls):
 def users_delete(pg_connection):
     pg = PostgresqlWorker(pg_connection)
     limit = pg.count_limit(sql_count)
-    log.logwrite('users limit to delete:', limit)
+    print('users limit to delete: ', limit)
     user_del_sql = [
         "DELETE FROM tmp_table_for_user_delete2;",
 
-        "INSERT INTO tmp_table_for_user_delete2(userid) SELECT userid "
-        "FROM tmp_table_for_user_delete ORDER BY userid LIMIT {0};".format(str(limit)),
+        "INSERT INTO tmp_table_for_user_delete2(userid) SELECT userid FROM tmp_table_for_user_delete ORDER BY userid LIMIT {0};".format(str(limit)),
 
         "DELETE FROM users WHERE id IN (SELECT userid FROM tmp_table_for_user_delete2);",
 
         "DELETE FROM tmp_table_for_user_delete WHERE userid IN (SELECT userid FROM tmp_table_for_user_delete2);"]
     with pg.transaction_cursor() as c:
         for line in user_del_sql:
+            print(line)
             c.execute(line)
-    if pg.row_numbers(sql_count):
-        print(pg.row_numbers(sql_count))
+    print(pg.row_numbers(sql_count)[0][0])
+    if not pg.row_numbers(sql_count)[0][0]:
         flag.set_flag(0)
 
 
@@ -234,12 +237,15 @@ class SuccessFlag:
         except:
             return False
 
+    def __str__(self):
+         return str(self.__bool__())
+
 
 def postgres_connect():
     try:
         return psycopg2.connect(database=pg_database, user=pg_user, password=pg_password, host=pg_host)
     except:
-        log.logwrite("Can't connect to postgres")
+        print("Can't connect to postgres")
 
 
 def pgtest():
@@ -251,45 +257,47 @@ if __name__ == '__main__':
     arglist = sys.argv[1:]
     flag = SuccessFlag()
     pgc = postgres_connect()
-    log = logcreate.Log(logname)
-    pgw = PostgresqlWorker(pgc)
-    print(pgw.count_limit('SELECT count(*) FROM tmp_table_for_user_delete;'))
-    # arglist.append('dbclean')
+    arglist.append('dbclean')
 
     if not arglist:
         print("Run script with parameters: daily, backup or dbclean")
         exit()
     elif 'daily' in arglist:
         try:
-            log.logwrite('Daily clean started')
-            sql_multi_execution(pgc, daily_sql)  # daily clean
-            log.logwrite('Daily clean complited') #TODO write time of execution in log
+            print('Daily clean started')
+            sql_multi_execution(pgc, daily_sql) # daily clean
+            print('Daily clean complite')
         except:
-            log.logwrite('Daily clean failed')
+            print(sys.exc_info())
+            print('Daily clean failed')
+
 
     elif 'backup' in arglist:
         try:
-            log.logwrite('Prepare table with users to delete...')
-            sql_multi_execution(pgc, tmp_table_prepare_sql)  # fill temp table
-            log.logwrite('complite')
-            log.logwrite('Backuping...')
+            print('Prepare table with users to delete...')
+            sql_multi_execution(pgc, tmp_table_prepare_sql) # filling temp table
+            print('complite')
+            print('Backuping...')
             pg_backuper(pgc, sql_for_backup)
-            log.logwrite('complite')
+            print('complite')
             flag.set_flag(1)
         except pymongo.errors.AutoReconnect:
             flag.set_flag(0)
-            log.logwrite('ConnectionError')
+            print(sys.exc_info())
+            print('ConnectionError')
         except:
             flag.set_flag(0)
-            log.logwrite('Backup failed')
+            print(sys.exc_info())
+            print('Backup failed')
 
     elif 'dbclean' in arglist:
         if flag:
             pgc = postgres_connect()
-            log.logwrite('Cleaning database...')
+            print('Cleaning database...')
             try:
                 users_delete(pgc)
-                log.logwrite('Users deleted in')
+                print('Users deleted')
             except:
-                log.logwrite('Database clean failed')
+                print(sys.exc_info())
+                print('Database clean failed')
     pgc.close()
