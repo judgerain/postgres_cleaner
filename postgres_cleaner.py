@@ -121,10 +121,13 @@ class PostgresqlWorker(psycopg.cursor):
     @contextmanager
     def transaction_cursor(self):
         try:
+            print('begin transaction')
             self.execute('begin work;')
             yield self
             self.execute('commit;')
+            print('committing transaction')
         except:
+            print('rollback:')
             print(sys.exc_info())
             self.execute('rollback;')
 
